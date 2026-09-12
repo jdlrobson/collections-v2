@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mood board creator</title>
+    <style>
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        background: #101418;
+        color: #e8eaed;
+      }
+      header {
+        padding: 1em 1.5em;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: .5em 1.5em;
+        border-bottom: 1px solid #2a2f36;
+        position: sticky;
+        top: 0;
+        background: rgba(16, 20, 24, .92);
+        backdrop-filter: blur(6px);
+        z-index: 2;
+      }
+      h1 { font-size: 1.15em; font-weight: 600; margin: 0; }
+      .subtitle { color: #9aa0a6; font-size: .9em; }
+      .status { color: #9aa0a6; font-size: .9em; margin-left: auto; }
+      button {
+        background: #3367d6; color: #fff; border: 0; border-radius: 4px;
+        padding: .45em .9em; font-size: .9em; cursor: pointer;
+      }
+      button:hover { background: #2a56c6; }
+      button:disabled { background: #3a3f46; color: #80868b; cursor: default; }
+      .board { padding: 1.5em; }
+      canvas { display: block; max-width: 100%; height: auto; margin: 0 auto; border-radius: 6px; }
+      .empty { padding: 3em 1.5em; text-align: center; color: #9aa0a6; }
+      a { color: #8ab4f8; }
+      code { background: #23282e; padding: 1px 5px; border-radius: 3px; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Mood board</h1>
+      <span class="subtitle" id="subtitle"></span>
+      <span class="status" id="status">Loading…</span>
+      <button id="download" disabled>Download PNG</button>
+    </header>
+    <div class="board"><canvas id="board"></canvas></div>
+    <div class="empty" id="empty" hidden></div>
+
+    <script>
+      const params = new URLSearchParams(window.location.search);
+      const wikiHost = params.get('wiki') || 'en.wikipedia.org';
+      const api = `https://${wikiHost}/w/api.php`;
+      const titlesParam = params.get('titles') || 'Paris|Baguette';
+      const titles = titlesParam.split('|').map((t) => t.trim()).filter(Boolean);
+
+      const statusEl = document.getElementById('status');
+      const subtitleEl = document.getElementById('subtitle');
+      const emptyEl = document.getElementById('empty');
+      const canvas = document.getElementById('board');
+      const ctx = canvas.getContext('2d');
+      const downloadBtn = document.getElementById('download');
+
+      subtitleEl.textContent = titles.join(' · ');
+      document.title = `Mood board — ${titles.join(', ')}`;
+
+      // Icons/logos/maintenance graphics we don't want cluttering the board.
+      const BLOCKLIST = [
+        'logo', 'icon', 'ambox', 'commons-', 'wiktionary', 'wikidata', 'wikisource',
+        'wikiquote', 'wikinews', 'wikibooks', 'wikivoyage', 'edit-clear', 'question_book',
+        'red_pentagon', 'padlock', 'symbol_', 'increase', 'decrease', 'steady',
+        'folder', 'crystal', 'nuvola', 'gnome', 'emblem', 'button', 'arrow',
+        'disambig', 'wiki_letter', 'text_document', 'magnify-clip', 'sound-icon',
+        'speakerlink', 'loudspeaker', 'star_full', 'star_empty', 'yes_check', 'x_mark'
+      ];
+
+      function keep(page) {
+        const info = page.imageinfo && page.imageinfo[0];
+        if (!info || !info.thumburl) return false;
+        if (!/^image\/(jpeg|png|gif|webp)$/.test(info.mime || '')) return false; // skip svg/tiff/etc.
+        if ((info.width || 0) < 200 || (info.height || 0) < 200) return false;   // skip small icons
+        const name = (page.title || '').toLowerCase();
+        if (BLOCKLIST.some((bad) => name.includes(bad))) return false;
+        return true;
+      }
+
+      async function fetchImages() {
+        const query = new URLSearchParams({
+          action: 'query',
+          titles: titles.join('|'),
+          generator: 'images',
+          gimlimit: '500',
+          prop: 'imageinfo',
+          iiprop: 'url|mime|size',
+          iiurlwidth: '500',
+          redirects: '1',
+          format: 'json',
+          formatversion: '2',
+          origin: '*'
+        });
+        const response = await fetch(`${api}?${query}`);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        const pages = (data.query && data.query.pages) || [];
+        const seen = new Set();
+        return pages
+          .filter(keep)
+          .filter((p) => { const u = p.imageinfo[0].thumburl; if (seen.has(u)) return false; seen.add(u); return true; })
+          .map((p) => ({ title: p.title, url: p.imageinfo[0].thumburl, descUrl: p.imageinfo[0].descriptionurl }));
+      }
+
+      function loadImage(src) {
+        return new Promise((resolve) => {
+          const img = new Image();
+          img.crossOrigin = 'anonymous'; // allow un-tainted canvas export
+          img.onload = () => resolve(img);
+          img.onerror = () => resolve(null);
+          img.src = src;
+        });
+      }
+
+      // Justified-rows layout: scale each row to fill the width at a comfortable height.
+      function render(images) {
+        const gap = 8;
+        const pad = 0;
+        const dpr = window.devicePixelRatio || 1;
+        const displayWidth = Math.min(1200, Math.max(320, window.innerWidth - 48));
+        const targetHeight = displayWidth < 600 ? 150 : 240;
+        const radius = 6;
+
+        // Group into rows.
+        const rows = [];
+        let row = [];
+        let aspectSum = 0;
+        for (const img of images) {
+          const aspect = img.naturalWidth / img.naturalHeight;
+          row.push({ img, aspect });
+          aspectSum += aspect;
+          const projectedWidth = aspectSum * targetHeight + gap * (row.length - 1);
+          if (projectedWidth >= displayWidth) {
+            rows.push({ items: row, aspectSum });
+            row = [];
+            aspectSum = 0;
+          }
+        }
+        if (row.length) rows.push({ items: row, aspectSum, last: true });
+
+        // Compute each row's height so it fills the width (except a short last row).
+        let totalHeight = pad;
+        const rowHeights = rows.map((r) => {
+          const gaps = gap * (r.items.length - 1);
+          const available = displayWidth - gaps - pad * 2;
+          let h = available / r.aspectSum;
+          if (r.last) h = Math.min(h, targetHeight);
+          totalHeight += h + gap;
+          return h;
+        });
+        totalHeight = totalHeight - gap + pad;
+
+        canvas.width = displayWidth * dpr;
+        canvas.height = totalHeight * dpr;
+        canvas.style.width = displayWidth + 'px';
+        canvas.style.height = totalHeight + 'px';
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.fillStyle = '#101418';
+        ctx.fillRect(0, 0, displayWidth, totalHeight);
+
+        let y = pad;
+        rows.forEach((r, ri) => {
+          const h = rowHeights[ri];
+          let x = pad;
+          r.items.forEach(({ img, aspect }) => {
+            const w = h * aspect;
+            roundedClip(x, y, w, h, radius);
+            drawCover(img, x, y, w, h);
+            ctx.restore();
+            x += w + gap;
+          });
+          y += h + gap;
+        });
+
+        downloadBtn.disabled = false;
+      }
+
+      function roundedClip(x, y, w, h, r) {
+        r = Math.min(r, w / 2, h / 2);
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(x + r, y);
+        ctx.arcTo(x + w, y, x + w, y + h, r);
+        ctx.arcTo(x + w, y + h, x, y + h, r);
+        ctx.arcTo(x, y + h, x, y, r);
+        ctx.arcTo(x, y, x + w, y, r);
+        ctx.closePath();
+        ctx.clip();
+      }
+
+      // Draw image covering the target box (object-fit: cover).
+      function drawCover(img, x, y, w, h) {
+        const boxAspect = w / h;
+        const imgAspect = img.naturalWidth / img.naturalHeight;
+        let sx = 0, sy = 0, sw = img.naturalWidth, sh = img.naturalHeight;
+        if (imgAspect > boxAspect) {
+          sw = img.naturalHeight * boxAspect;
+          sx = (img.naturalWidth - sw) / 2;
+        } else {
+          sh = img.naturalWidth / boxAspect;
+          sy = (img.naturalHeight - sh) / 2;
+        }
+        ctx.drawImage(img, sx, sy, sw, sh, x, y, w, h);
+      }
+
+      let loadedImages = [];
+      function rerender() { if (loadedImages.length) render(loadedImages); }
+
+      let resizeTimer;
+      window.addEventListener('resize', () => {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(rerender, 150);
+      });
+
+      downloadBtn.addEventListener('click', () => {
+        try {
+          const link = document.createElement('a');
+          link.download = `moodboard-${titles.join('-').replace(/[^\w-]+/g, '_')}.png`;
+          link.href = canvas.toDataURL('image/png');
+          link.click();
+        } catch (e) {
+          statusEl.textContent = 'Download blocked: some images are not CORS-accessible.';
+        }
+      });
+
+      async function main() {
+        if (!titles.length) {
+          statusEl.textContent = '';
+          canvas.hidden = true;
+          emptyEl.hidden = false;
+          emptyEl.innerHTML = 'No titles requested. Try <code>?titles=Paris|Baguette</code> in the URL.';
+          return;
+        }
+        try {
+          statusEl.textContent = 'Fetching image list…';
+          const list = await fetchImages();
+          if (!list.length) {
+            statusEl.textContent = '';
+            canvas.hidden = true;
+            emptyEl.hidden = false;
+            emptyEl.textContent = `No suitable images found for: ${titles.join(', ')}.`;
+            return;
+          }
+          statusEl.textContent = `Loading ${list.length} images…`;
+          let done = 0;
+          const results = await Promise.all(list.map((item) =>
+            loadImage(item.url).then((img) => { statusEl.textContent = `Loading ${++done}/${list.length} images…`; return img; })
+          ));
+          loadedImages = results.filter(Boolean);
+          if (!loadedImages.length) {
+            statusEl.textContent = 'Could not load any images.';
+            return;
+          }
+          render(loadedImages);
+          statusEl.textContent = `${loadedImages.length} images`;
+        } catch (error) {
+          statusEl.textContent = `Error: ${error.message}`;
+        }
+      }
+
+      main();
+    </script>
+  </body>
+</html>
