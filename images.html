@@ -88,24 +88,42 @@
         return true;
       }
 
+      const TITLES_PER_REQUEST = 50;
+      const BATCH_DELAY_MS = 2000;
+      const chunk = (list, size) => {
+        const chunks = [];
+        for (let i = 0; i < list.length; i += size) chunks.push(list.slice(i, i + size));
+        return chunks;
+      };
+      const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
       async function fetchImages() {
-        const query = new URLSearchParams({
-          action: 'query',
-          titles: titles.join('|'),
-          generator: 'images',
-          gimlimit: '500',
-          prop: 'imageinfo',
-          iiprop: 'url|mime|size',
-          iiurlwidth: '500',
-          redirects: '1',
-          format: 'json',
-          formatversion: '2',
-          origin: '*'
-        });
-        const response = await fetch(`${api}?${query}`);
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const data = await response.json();
-        const pages = (data.query && data.query.pages) || [];
+        // The API caps `titles` at 50 per request, so batch and pace the requests.
+        const batches = chunk(titles, TITLES_PER_REQUEST);
+        const pages = [];
+        for (let i = 0; i < batches.length; i++) {
+          if (i > 0) {
+            statusEl.textContent = `Fetching image list… (batch ${i + 1} of ${batches.length})`;
+            await delay(BATCH_DELAY_MS);
+          }
+          const query = new URLSearchParams({
+            action: 'query',
+            titles: batches[i].join('|'),
+            generator: 'images',
+            gimlimit: '500',
+            prop: 'imageinfo',
+            iiprop: 'url|mime|size',
+            iiurlwidth: '500',
+            redirects: '1',
+            format: 'json',
+            formatversion: '2',
+            origin: '*'
+          });
+          const response = await fetch(`${api}?${query}`);
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const data = await response.json();
+          pages.push(...((data.query && data.query.pages) || []));
+        }
         const seen = new Set();
         return pages
           .filter(keep)

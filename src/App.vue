@@ -131,18 +131,40 @@ function metabookJson(pretty = false) {
   return JSON.stringify(metabook.value, null, pretty ? 2 : 0);
 }
 
+const TITLES_PER_REQUEST = 50;
+const BATCH_DELAY_MS = 2000;
+function chunk(list, size) {
+  const chunks = [];
+  for (let i = 0; i < list.length; i += size) chunks.push(list.slice(i, i + size));
+  return chunks;
+}
+function delay(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+
 async function loadTitles(titlesString) {
-  console.log(titlesString);
   const titles = titlesString ? titlesString.split('|').map((item) => item.trim()).filter(Boolean) : [];
   if (!titles.length) {
     showNotice('No pages requested. Add ?titles=Page1|Page2 to the URL.', 'warning');
     return;
   }
-  const query = new URLSearchParams({ action: 'query', ...pageQueryProps, titles: titles.join('|'), redirects: '1', format: 'json', formatversion: '2', origin: '*' });
+  // The API caps `titles` at 50 per request, so batch and pace the requests.
+  const batches = chunk(titles, TITLES_PER_REQUEST);
+  const merged = { query: { pages: [], normalized: [], redirects: [] } };
   try {
-    const response = await fetch(`${api}?${query}`);
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    buildFromApi(titles, await response.json());
+    for (let i = 0; i < batches.length; i++) {
+      if (i > 0) {
+        showNotice(`Loading pages… (batch ${i + 1} of ${batches.length})`);
+        await delay(BATCH_DELAY_MS);
+      }
+      const query = new URLSearchParams({ action: 'query', ...pageQueryProps, titles: batches[i].join('|'), redirects: '1', format: 'json', formatversion: '2', origin: '*' });
+      const response = await fetch(`${api}?${query}`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      const q = data?.query || {};
+      merged.query.pages.push(...(q.pages || []));
+      merged.query.normalized.push(...(q.normalized || []));
+      merged.query.redirects.push(...(q.redirects || []));
+    }
+    buildFromApi(titles, merged);
   } catch (error) {
     showNotice(`Could not load pages from ${wikiHost}: ${error.message}. (Open this file over http(s) or check the wiki host.)`, 'error');
   }
