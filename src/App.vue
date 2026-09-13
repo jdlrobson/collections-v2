@@ -350,7 +350,7 @@ ${items.value
 ` : `: [[${item.title}]]
 `).join(`
 `)}`;
-  const bookTitle = `User:Jon (WMF)/Books/${encodeURIComponent(name)}`;
+  const bookTitle = `Special:MyPage/Books/${encodeURIComponent(name)}`;
   window.open(`https://${wikiHost}/wiki/${bookTitle}?action=edit&preload=Template:Preload_wikitext&preloadparams[]=${encodeURIComponent(wikitext)}`, '_blank', 'noopener');
 }
 
@@ -491,7 +491,7 @@ onMounted(() => {
           <h2>Save your book</h2>
           <p>Save this book as a page under your user space.</p>
           <form @submit="saveBook">
-            <CdxField label="User:Jon (WMF)/Books/"><CdxTextInput v-model="saveBookName" /></CdxField>
+            <CdxField label="Special:MyPage/Books/"><CdxTextInput v-model="saveBookName" /></CdxField>
             <CdxButton action="progressive" type="submit">Submit</CdxButton>
           </form>
         </section>
