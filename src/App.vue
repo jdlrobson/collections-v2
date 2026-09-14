@@ -225,14 +225,43 @@ function onDragOver(index) {
   if (dragIndex.value === null) return;
   dragOverIndex.value = index;
 }
+function chapterSpan(index) {
+  // A chapter owns every following article until the next chapter (or the end).
+  let end = index + 1;
+  while (end < items.value.length && items.value[end].type !== 'chapter') end++;
+  return end - index;
+}
 function onDrop(index) {
   const from = dragIndex.value;
   resetDrag();
   if (from === null || from === index) return;
-  const reordered = [...items.value];
-  const [moved] = reordered.splice(from, 1);
-  reordered.splice(index, 0, moved);
-  items.value = reordered;
+  const list = items.value;
+  const isChapter = list[from]?.type === 'chapter';
+  const count = isChapter ? chapterSpan(from) : 1;
+  // Ignore drops that land inside the dragged chapter's own block.
+  if (index > from && index < from + count) return;
+  // Insertion point in the original list. A chapter snaps to a chapter
+  // boundary so it is never dropped inside (and splitting) another chapter.
+  let insertAt;
+  if (isChapter && from < index) {
+    // Dragging down: land after the whole chapter block the target belongs to.
+    let end = index + 1;
+    while (end < list.length && list[end].type !== 'chapter') end++;
+    insertAt = end;
+  } else if (isChapter) {
+    // Dragging up: land before the chapter heading the target belongs to.
+    let start = index;
+    while (start > 0 && list[start].type !== 'chapter') start--;
+    insertAt = start;
+  } else {
+    insertAt = from < index ? index + 1 : index;
+  }
+  const moved = list.slice(from, from + count);
+  const rest = [ ...list.slice(0, from), ...list.slice(from + count) ];
+  // The removed block sits before the insertion point when dragging down.
+  if (from < insertAt) insertAt -= count;
+  rest.splice(insertAt, 0, ...moved);
+  items.value = rest;
 }
 function resetDrag() {
   dragIndex.value = null;
@@ -482,8 +511,10 @@ onMounted(() => {
         <section class="side-box">
           <h2>Order as a printed book</h2>
           <p>Get a printed book or PDF from our print-on-demand partner PediaPress.</p>
-          <form action="https://pediapress.com/api/collections/" method="POST" target="_blank" @submit="previewBook">
+          <form action="https://en.wikipedia.org/wiki/Special:Book" method="POST" target="_blank" @submit="previewBook">
             <input type="hidden" name="metabook">
+            <input <input type="hidden" name="bookcmd" value="post_zip">
+            <input type="hidden" name="partner" value="pediapress">
             <CdxButton action="progressive" :disabled="articleCount === 0" type="submit">Preview with PediaPress</CdxButton>
           </form>
         </section>
