@@ -33,8 +33,10 @@ const orderPageUrl = computed(() => `${new URL('order.html', window.location.hre
 const postCollectionUrl = computed(() => `${api.value}?action=collection&submodule=postcollection&format=none`);
 const booksStorageKey = 'collections-from-rl-books';
 const activeBookStorageKey = 'collections-from-rl-active-book-id';
-const bookQueryParameters = [ 'titles', 'id', 'wiki', 'name', 'desc' ];
 const pageQueryProps = { prop: 'revisions|pageimages|description', rvprop: 'ids|timestamp', piprop: 'thumbnail', pithumbsize: '120' };
+// Prefix that marks a chapter heading inside the pipe-delimited ?titles= list, e.g.
+// "Chapter:My first chapter". Everything else in the list is an article title.
+const CHAPTER_PREFIX = 'Chapter:';
 
 function pageToItem(page) {
   const revision = page.revisions?.[0] || {};
@@ -193,13 +195,22 @@ function chunk(list, size) {
 function delay(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
 async function loadTitles(titlesString) {
-  const titles = titlesString ? titlesString.split('|').map((item) => item.trim()).filter(Boolean) : [];
-  if (!titles.length) {
+  // Parse the pipe-delimited list into an ordered sequence of chapters and
+  // articles; a "Chapter:" prefix marks a chapter heading, everything else is a
+  // page title to fetch from the API.
+  const entries = (titlesString ? titlesString.split('|') : [])
+    .map((raw) => raw.trim())
+    .filter(Boolean)
+    .map((entry) => entry.startsWith(CHAPTER_PREFIX)
+      ? { type: 'chapter', title: entry.slice(CHAPTER_PREFIX.length).trim() }
+      : { type: 'article', title: entry });
+  if (!entries.length) {
     showNotice('No pages requested. Add ?titles=Page1|Page2 to the URL.', 'warning');
     return;
   }
+  const articleTitles = entries.filter((entry) => entry.type === 'article').map((entry) => entry.title);
   // The API caps `titles` at 50 per request, so batch and pace the requests.
-  const batches = chunk(titles, TITLES_PER_REQUEST);
+  const batches = chunk(articleTitles, TITLES_PER_REQUEST);
   const merged = { query: { pages: [], normalized: [], redirects: [] } };
   try {
     for (let i = 0; i < batches.length; i++) {
@@ -216,17 +227,17 @@ async function loadTitles(titlesString) {
       merged.query.normalized.push(...(q.normalized || []));
       merged.query.redirects.push(...(q.redirects || []));
     }
-    buildFromApi(titles, merged);
+    buildFromApi(entries, merged);
   } catch (error) {
     showNotice(`Could not load pages from ${wikiHost.value}: ${error.message}. (Open this file over http(s) or check the wiki host.)`, 'error');
   }
 }
 
-function buildFromApi(requestedTitles, data) {
+function buildFromApi(entries, data) {
   const query = data?.query || {};
   const pages = query.pages || [];
   const aliases = {};
-  [...(query.normalized || []), ...(query.redirects || [])].forEach((entry) => { aliases[entry.from] = entry.to; });
+  [...(query.normalized || []), ...(query.redirects || [])].forEach((alias) => { aliases[alias.from] = alias.to; });
   const resolve = (requested) => {
     const seen = new Set();
     let resolved = requested;
@@ -238,7 +249,11 @@ function buildFromApi(requestedTitles, data) {
   };
   const byTitle = Object.fromEntries(pages.map((page) => [page.title, page]));
   let missingCount = 0;
-  items.value = requestedTitles.map((requestedTitle) => {
+  let articleTotal = 0;
+  items.value = entries.map((entry) => {
+    if (entry.type === 'chapter') return { type: 'chapter', title: entry.title };
+    articleTotal++;
+    const requestedTitle = entry.title;
     const canonical = resolve(requestedTitle);
     const page = byTitle[canonical] || pages.find((candidate) => candidate.title.toLowerCase() === requestedTitle.toLowerCase());
     if (!page || page.missing) {
@@ -248,7 +263,7 @@ function buildFromApi(requestedTitles, data) {
     }
     return pageToItem(page);
   });
-  const found = items.value.length - missingCount;
+  const found = articleTotal - missingCount;
   if (missingCount) showNotice(`${found} page(s) loaded, ${missingCount} not found (shown in red).`, 'warning');
   else {
     noticeVisible.value = false;
@@ -487,6 +502,39 @@ ${items.value
   window.open(`https://${wikiHost.value}/wiki/${bookTitle}?action=edit&preload=Template:Preload_wikitext&preloadparams[]=${encodeURIComponent(wikitext)}`, '_blank', 'noopener');
 }
 
+// Serialise the book into the pipe-delimited ?titles= value: chapters become
+// "Chapter:<name>", articles keep their title, each entry percent-encoded so the
+// pipe stays the only separator. Missing pages are dropped — they can't reload.
+function buildShareTitles() {
+  return items.value
+    .filter((item) => !item.missing)
+    .map((item) => item.type === 'chapter' ? `${CHAPTER_PREFIX}${item.title}` : item.title)
+    .map((entry) => encodeURIComponent(entry))
+    .join('|');
+}
+
+// Build a self-importing link (?titles=Chapter:Name|A|B&wiki=host&name=…&desc=…)
+// and copy it to the clipboard. Opening it in a fresh browser (e.g. incognito, no
+// saved state) rebuilds the whole book — title, description, chapters, and pages —
+// from the query string alone.
+async function shareBook() {
+  const titlesParam = buildShareTitles();
+  if (!titlesParam) {
+    showNotice('Nothing to share yet — add some pages first.', 'warning');
+    return;
+  }
+  const base = `${window.location.origin}${window.location.pathname}`;
+  let url = `${base}?titles=${titlesParam}&wiki=${wikiHost.value}`;
+  if (title.value.trim()) url += `&name=${encodeURIComponent(title.value.trim())}`;
+  if (subtitle.value.trim()) url += `&desc=${encodeURIComponent(subtitle.value.trim())}`;
+  try {
+    await navigator.clipboard.writeText(url);
+    showNotice('Share link copied to clipboard.', 'success');
+  } catch {
+    showNotice(`Copy failed — here is your share link: ${url}`, 'warning');
+  }
+}
+
 // Delay before steering the popup off the (blank) store response to the spinner
 // page. The POST must have left the browser by then (the server commits the
 // session on receipt, so a warm connection makes this safe).
@@ -519,11 +567,12 @@ function clearBookQuery() {
 }
 
 function initializeBookFromQuery() {
-  const hasBookQuery = bookQueryParameters.some((parameter) => params.has(parameter));
-  if (!hasBookQuery) return null;
+  // The full book-import form is keyed on `id` (id/name/desc/titles). A bare
+  // ?titles=…&wiki=… share link has no id and is handled by the simpler
+  // loadTitles path in onMounted instead.
+  if (!params.has('id')) return null;
 
-
-  const missingParameters = bookQueryParameters.filter((parameter) => params.get(parameter) === null);
+  const missingParameters = [ 'name', 'desc', 'titles' ].filter((parameter) => params.get(parameter) === null);
   if (missingParameters.length) {
     showNotice(`Missing book parameter(s): ${missingParameters.join(', ')}.`, 'error');
     return { handled: true };
@@ -563,8 +612,14 @@ onMounted(() => {
     return;
   }
   const titles = params.get('titles') || activeBook.value.titles || '';
-  if (titles) loadTitles(titles);
-  else noticeVisible.value = false;
+  if (titles) {
+    // A share link also carries the book's title (name) and description (desc).
+    const name = params.get('name');
+    const desc = params.get('desc');
+    if (name !== null) title.value = name;
+    if (desc !== null) subtitle.value = desc;
+    loadTitles(titles);
+  } else noticeVisible.value = false;
 });
 </script>
 
@@ -667,6 +722,11 @@ onMounted(() => {
             <CdxField label="Special:MyPage/Books/"><CdxTextInput v-model="saveBookName" /></CdxField>
             <CdxButton action="progressive" type="submit">Submit</CdxButton>
           </form>
+        </section>
+        <section class="side-box">
+          <h2>Share your book</h2>
+          <p>Copy a link that recreates this book — pages and chapters — for anyone who opens it.</p>
+          <CdxButton action="progressive" :disabled="!hasItems" @click="shareBook">Share book</CdxButton>
         </section>
       </aside>
     </div>
