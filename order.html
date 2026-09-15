@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Preparing your book…</title>
+    <style>
+      html, body { height: 100%; margin: 0; }
+      body {
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
+        gap: 1.25em; font-family: sans-serif; color: #202122; background: #fff;
+      }
+      .spinner {
+        width: 48px; height: 48px; border: 4px solid #c8ccd1; border-top-color: #36c;
+        border-radius: 50%; animation: spin 1s linear infinite;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      p { margin: 0; font-size: 1.1em; color: #54595d; }
+      @media (prefers-color-scheme: dark) {
+        body { background: #101418; color: #eaecf0; }
+        p { color: #a2a9b1; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="spinner" role="status" aria-label="Loading"></div>
+    <p>Preparing your book for PediaPress…</p>
+    <script>
+      // The popup rests here while post_zip renders the collection and redirects to
+      // PediaPress; the browser keeps this spinner painted until that response
+      // arrives. We forward to ?next once the spinner has had a frame to paint.
+      (function () {
+        var next = new URLSearchParams(location.search).get('next');
+        if (!next || !/^https:\/\//.test(next)) return;
+        requestAnimationFrame(function () {
+          requestAnimationFrame(function () {
+            setTimeout(function () { location.replace(next); }, 50);
+          });
+        });
+      })();
+    </script>
+  </body>
+</html>

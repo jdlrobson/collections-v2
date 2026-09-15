@@ -6,8 +6,20 @@ import { cdxIconArrowDown, cdxIconArrowUp, cdxIconTrash, cdxIconEdit } from '@wi
 const params = new URLSearchParams(window.location.search);
 const wikiHost = params.get('wiki') || 'en.wikipedia.org';
 const api = `https://${wikiHost}/w/api.php`;
-const baseUrl = `https://${wikiHost}/w/`;
 const articlePath = `https://${wikiHost}/wiki/`;
+const specialBookUrl = `https://${wikiHost}/wiki/Special:Book`;
+// Special:Book's post_zip command uploads the session collection to PediaPress and
+// 302-redirects to their order form; it accepts GET, so a plain navigation works.
+const pediaPressOrderUrl = `${specialBookUrl}?bookcmd=post_zip&partner=pediapress`;
+// Same-origin spinner page the popup rests on while post_zip renders (we can't
+// paint onto the cross-origin wiki page); it forwards to ?next once painted.
+const orderPageUrl = `${new URL('order.html', window.location.href).href}?next=${encodeURIComponent(pediaPressOrderUrl)}`;
+// postcollection stores the collection in the user's wiki session; a top-level
+// form POST is required so the request carries the session cookie (a cross-origin
+// fetch would be anonymous and land in a throwaway session). format=none returns
+// an empty body, so the intermediate store step shows a blank page rather than a
+// JSON dump before we steer the popup on to the order form.
+const postCollectionUrl = `${api}?action=collection&submodule=postcollection&format=none`;
 const booksStorageKey = 'collections-from-rl-books';
 const activeBookStorageKey = 'collections-from-rl-active-book-id';
 const bookQueryParameters = [ 'titles', 'id', 'wiki', 'name', 'desc' ];
@@ -51,6 +63,7 @@ const noticeText = ref('Loading pages from Wikipedia...');
 const noticeType = ref('notice');
 const noticeVisible = ref(true);
 const metabookOpen = ref(false);
+const sentToWiki = ref(false);
 
 const activeBook = computed(() => books.value.find((book) => book.id === activeBookId.value) || books.value[0]);
 saveBookName.value = activeBook.value.title;
@@ -97,22 +110,16 @@ function showNotice(message, type = 'notice') {
 function buildMetabook() {
   const result = {
     type: 'collection',
-    licenses: [ {
-      type: 'license',
-      name: 'License',
-      mw_license_url: `${baseUrl}index.php?title=${encodeURIComponent('Wikipedia:Text_of_the_Creative_Commons_Attribution-ShareAlike_4.0_International_License')}&action=raw`
-    } ],
     title: title.value,
     subtitle: subtitle.value,
-    items: [],
-    wikis: [ { type: 'wikiconf', baseurl: baseUrl, script_extension: '.php', format: 'nuwiki' } ]
+    items: []
   };
   let currentChapter = null;
   items.value.forEach((item) => {
     if (item.missing) return;
     if (item.type === 'chapter') {
       if (currentChapter) result.items.push(currentChapter);
-      currentChapter = { type: 'chapter', title: item.title, items: [] };
+      currentChapter = { type: 'chapter', title: item.title };
       return;
     }
     const article = {
@@ -120,8 +127,7 @@ function buildMetabook() {
       revision: String(item.revision), latest: String(item.latest), timestamp: item.timestamp,
       url: item.url, currentVersion: item.currentVersion
     };
-    if (currentChapter) currentChapter.items.push(article);
-    else result.items.push(article);
+    result.items.push(article);
   });
   if (currentChapter) result.items.push(currentChapter);
   return result;
@@ -383,11 +389,31 @@ ${items.value
   window.open(`https://${wikiHost}/wiki/${bookTitle}?action=edit&preload=Template:Preload_wikitext&preloadparams[]=${encodeURIComponent(wikitext)}`, '_blank', 'noopener');
 }
 
-function previewBook(event) {
-  event.preventDefault();
+// Delay before steering the popup off the (blank) store response to the spinner
+// page. The POST must have left the browser by then (the server commits the
+// session on receipt, so a warm connection makes this safe).
+const REORDER_REDIRECT_MS = 900;
+
+// Load the collection into the user's wiki session, then land the user on the
+// PediaPress order form. The form submits natively (POST) into a popup we own: a
+// top-level, first-party navigation that carries the session cookie — a
+// cross-origin fetch or hidden iframe cannot (third-party cookies are
+// blocked/partitioned), so this step can't be fully backgrounded. format=none
+// makes the store response blank instead of a JSON dump; once the POST has
+// dispatched we steer the popup to our same-origin spinner page, which forwards to
+// post_zip — the browser keeps the spinner painted through post_zip's (slow)
+// render until PediaPress responds. The links shown below are a fallback if the
+// popup is blocked.
+function reorderOnWiki(event) {
   const form = event.currentTarget;
-  form.querySelector('input').value = metabookJson();
-  form.submit();
+  form.querySelector('input[name="collection"]').value = metabookJson();
+  // Pre-open the named window (the form's target) so we hold a handle to it and
+  // can steer it once the POST that populates the session has dispatched.
+  const popup = window.open('', 'wikiCollection');
+  sentToWiki.value = true;
+  window.setTimeout(() => {
+    if (popup && !popup.closed) popup.location = orderPageUrl;
+  }, REORDER_REDIRECT_MS);
 }
 
 function clearBookQuery() {
@@ -509,14 +535,18 @@ onMounted(() => {
       </section>
       <aside class="collection-column-right">
         <section class="side-box">
-          <h2>Order as a printed book</h2>
-          <p>Get a printed book or PDF from our print-on-demand partner PediaPress.</p>
-          <form action="https://en.wikipedia.org/wiki/Special:Book" method="POST" target="_blank" @submit="previewBook">
-            <input type="hidden" name="metabook">
-            <input <input type="hidden" name="bookcmd" value="post_zip">
-            <input type="hidden" name="partner" value="pediapress">
-            <CdxButton action="progressive" :disabled="articleCount === 0" type="submit">Preview with PediaPress</CdxButton>
+          <h2>Order a printed book</h2>
+          <p>Get a printed book or PDF from our print-on-demand partner PediaPress. This loads your collection into {{ wikiHost }} and opens the PediaPress order form.</p>
+          <form method="POST" target="wikiCollection" :action="postCollectionUrl" @submit="reorderOnWiki">
+            <input type="hidden" name="collection">
+            <CdxButton action="progressive" :disabled="articleCount === 0" type="submit">Order with PediaPress</CdxButton>
           </form>
+          <div v-if="sentToWiki" class="reorder-link">
+            <p>Collection sent. If the tab didn't open, <a :href="pediaPressOrderUrl" target="_blank" rel="noopener">order it with PediaPress</a> or <a :href="specialBookUrl" target="_blank" rel="noopener">reorder it on Special:Book</a> first.</p>
+          </div>
+          <div v-else>
+            <p>Clicking "Order with PediaPress" will transfer you to PediaPress. After clicking order, please wait 5s to be redirected.</p>
+          </div>
         </section>
         <section class="side-box">
           <h2>Save your book</h2>

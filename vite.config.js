@@ -8,7 +8,8 @@ export default defineConfig({
     rollupOptions: {
       input: {
         main: fileURLToPath(new URL('./index.html', import.meta.url)),
-        images: fileURLToPath(new URL('./images.html', import.meta.url))
+        images: fileURLToPath(new URL('./images.html', import.meta.url)),
+        order: fileURLToPath(new URL('./order.html', import.meta.url))
       }
     }
   }
