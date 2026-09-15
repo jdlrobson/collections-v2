@@ -385,6 +385,48 @@ function onPageSelected(value) {
   pageSearchResults.value = [];
 }
 
+const RECOMMEND_LIMIT = 10;
+// Cap the seed titles so the morelike query stays within a sane GET URL length.
+const RECOMMEND_SEED_LIMIT = 50;
+// Ask the wiki for pages similar to the book's current articles (CirrusSearch's
+// morelike), then append them under a "Recommended" chapter.
+async function recommend() {
+  const seeds = items.value
+    .filter((item) => item.type === 'article' && !item.missing)
+    .map((item) => item.title);
+  if (!seeds.length) {
+    showNotice('Add some articles first to get recommendations.', 'warning');
+    return;
+  }
+  const inBook = new Set(items.value.map((item) => item.title));
+  const morelike = seeds.slice(0, RECOMMEND_SEED_LIMIT).join('|');
+  const query = new URLSearchParams({
+    action: 'query', ...pageQueryProps,
+    generator: 'search', gsrsearch: `morelike:${morelike}`,
+    gsrnamespace: '0', gsrlimit: String(RECOMMEND_LIMIT),
+    gsrqiprofile: 'classic_noboostlinks', uselang: 'content',
+    format: 'json', formatversion: '2', origin: '*'
+  });
+  try {
+    const response = await fetch(`${api.value}?${query}`);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+    const pages = (data?.query?.pages || [])
+      .filter((page) => !page.missing && !inBook.has(page.title))
+      // Generator results carry the search rank in `index`; preserve that order.
+      .sort((a, b) => (a.index || 0) - (b.index || 0));
+    if (!pages.length) {
+      showNotice('No new recommendations found.', 'warning');
+      return;
+    }
+    items.value.push({ type: 'chapter', title: 'Recommended' }, ...pages.map(pageToItem));
+    saveBooks();
+    showNotice(`Added ${pages.length} recommended page(s) from ${wikiHost.value}.`);
+  } catch (error) {
+    showNotice(`Could not load recommendations: ${error.message}`, 'error');
+  }
+}
+
 function renameChapter(index) {
   const name = window.prompt('Enter new name for chapter', items.value[index].title);
   if (name) items.value[index].title = name.slice(0, 200);
@@ -597,6 +639,9 @@ onMounted(() => {
               <CdxIcon :icon="cdxIconTrash" />
             </CdxButton>
           </li>
+          <li class="recommend-row">
+            <CdxButton weight="quiet" :disabled="articleCount === 0" @click="recommend">Recommend related articles</CdxButton>
+          </li>
         </ul>
         <p v-else class="empty">Empty book</p>
       </section>
@@ -666,6 +711,7 @@ a { color: #36c; text-decoration: none; } a:hover { text-decoration: underline; 
 .collection-list li.dragging { opacity: .4; }
 .collection-list li.drag-over { border-top: 2px solid #36c; }
 .collection-list li.article { padding-left: 1.5em; } .collection-list li.chapter { background: #eaecf0; font-weight: bold; }
+.collection-list li.recommend-row { cursor: default; }
 .reorder { display: flex; flex-direction: column; line-height: .7; } .item-title { flex: 1; display: flex; flex-direction: column; } .missing .item-title { color: #d33; }
 .item-thumb { object-fit: cover; border: 1px solid var(--border-light); border-radius: 2px; background: var(--bg-subtle); flex: none; }
 .item-description { color: #54595d; font-size: 90%; }
