@@ -581,7 +581,7 @@ onMounted(() => {
     <div class="collection-container">
       <section class="collection-column-left">
         <div class="project-picker">
-          <CdxField label="Language:">
+          <CdxField label="Language:" class="language-picker">
             <CdxTextInput v-model="languageInput" @change="changeTarget(languageInput, project)" />
           </CdxField>
           <CdxField label="Wiki:">
@@ -705,6 +705,8 @@ a { color: #36c; text-decoration: none; } a:hover { text-decoration: underline; 
 .book-picker .cdx-field { flex: 1; }
 .project-picker { align-items: end; display: flex; gap: .75em; margin-bottom: 1em; }
 .project-picker .cdx-field { flex: 1; }
+.language-picker { max-width: 80px; }
+.language-picker .cdx-text-input { min-width: auto; }
 .collection-hint { color: #54595d; font-size: 95%; font-style: italic; margin: .25em 0 .75em; }
 .collection-list { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--border-light); }
 .collection-list li { display: flex; align-items: center; gap: .25em; padding: 4px; border-bottom: 1px solid var(--border-light); cursor: grab; }
