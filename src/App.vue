@@ -219,6 +219,16 @@ function move(index, delta) {
   items.value = reordered;
 }
 function removeItem(index) { items.value.splice(index, 1); }
+function removeChapter(index) {
+  const span = chapterSpan(index);
+  const pageCount = span - 1;
+  const detail = pageCount
+    ? ` and its ${pageCount} page${pageCount === 1 ? '' : 's'}`
+    : '';
+  if (window.confirm(`Delete the chapter "${items.value[index].title}"${detail}? This cannot be undone.`)) {
+    items.value.splice(index, span);
+  }
+}
 
 const dragIndex = ref(null);
 const dragOverIndex = ref(null);
@@ -526,7 +536,10 @@ onMounted(() => {
             <CdxButton v-if="item.type === 'chapter'" weight="quiet" aria-label="Rename chapter" @click="renameChapter(index)">
               <CdxIcon :icon="cdxIconEdit" />
             </CdxButton>
-            <CdxButton weight="quiet" aria-label="Remove" @click="removeItem(index)">
+            <CdxButton v-if="item.type === 'chapter'" weight="quiet" aria-label="Delete chapter and its pages" @click="removeChapter(index)">
+              <CdxIcon :icon="cdxIconTrash" />
+            </CdxButton>
+            <CdxButton v-else weight="quiet" aria-label="Remove" @click="removeItem(index)">
               <CdxIcon :icon="cdxIconTrash" />
             </CdxButton>
           </li>
