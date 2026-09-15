@@ -569,10 +569,6 @@ onMounted(() => {
             <CdxButton action="progressive" type="submit">Submit</CdxButton>
           </form>
         </section>
-        <details class="metabook">
-          <summary>View metabook JSON (sent to the render server)</summary>
-          <pre>{{ metabookJson(true) }}</pre>
-        </details>
       </aside>
     </div>
     <p class="footer">Standalone reimplementation of <code>Special:Book</code> (the MediaWiki <a href="https://www.mediawiki.org/wiki/Extension:Collection">Collection</a> extension). Pages can be supplied via the <code>?titles=A|B|C&wiki=en.wikipedia.org</code> query string and loaded live from <span>{{ wikiHost }}</span>.</p>
