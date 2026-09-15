@@ -4,22 +4,33 @@ import { CdxButton, CdxDialog, CdxField, CdxIcon, CdxLookup, CdxMessage, CdxSele
 import { cdxIconArrowDown, cdxIconArrowUp, cdxIconTrash, cdxIconEdit } from '@wikimedia/codex-icons';
 
 const params = new URLSearchParams(window.location.search);
-const wikiHost = params.get('wiki') || 'en.wikipedia.org';
-const api = `https://${wikiHost}/w/api.php`;
-const articlePath = `https://${wikiHost}/wiki/`;
-const specialBookUrl = `https://${wikiHost}/wiki/Special:Book`;
+const DEFAULT_WIKI = 'en.wikipedia.org';
+// Split a wiki host into its language subdomain and the project domain, e.g.
+// "fr.wikipedia.org" -> language "fr", project "wikipedia.org".
+function parseWikiHost(host) {
+  const firstDot = host.indexOf('.');
+  if (firstDot === -1) return { language: host, project: 'wikipedia.org' };
+  return { language: host.slice(0, firstDot), project: host.slice(firstDot + 1) };
+}
+const parsedWiki = parseWikiHost(params.get('wiki') || DEFAULT_WIKI);
+const language = ref(parsedWiki.language);
+const project = ref(parsedWiki.project);
+const wikiHost = computed(() => `${language.value}.${project.value}`);
+const api = computed(() => `https://${wikiHost.value}/w/api.php`);
+const articlePath = computed(() => `https://${wikiHost.value}/wiki/`);
+const specialBookUrl = computed(() => `https://${wikiHost.value}/wiki/Special:Book`);
 // Special:Book's post_zip command uploads the session collection to PediaPress and
 // 302-redirects to their order form; it accepts GET, so a plain navigation works.
-const pediaPressOrderUrl = `${specialBookUrl}?bookcmd=post_zip&partner=pediapress`;
+const pediaPressOrderUrl = computed(() => `${specialBookUrl.value}?bookcmd=post_zip&partner=pediapress`);
 // Same-origin spinner page the popup rests on while post_zip renders (we can't
 // paint onto the cross-origin wiki page); it forwards to ?next once painted.
-const orderPageUrl = `${new URL('order.html', window.location.href).href}?next=${encodeURIComponent(pediaPressOrderUrl)}`;
+const orderPageUrl = computed(() => `${new URL('order.html', window.location.href).href}?next=${encodeURIComponent(pediaPressOrderUrl.value)}`);
 // postcollection stores the collection in the user's wiki session; a top-level
 // form POST is required so the request carries the session cookie (a cross-origin
 // fetch would be anonymous and land in a throwaway session). format=none returns
 // an empty body, so the intermediate store step shows a blank page rather than a
 // JSON dump before we steer the popup on to the order form.
-const postCollectionUrl = `${api}?action=collection&submodule=postcollection&format=none`;
+const postCollectionUrl = computed(() => `${api.value}?action=collection&submodule=postcollection&format=none`);
 const booksStorageKey = 'collections-from-rl-books';
 const activeBookStorageKey = 'collections-from-rl-active-book-id';
 const bookQueryParameters = [ 'titles', 'id', 'wiki', 'name', 'desc' ];
@@ -31,7 +42,7 @@ function pageToItem(page) {
     type: 'article', content_type: 'text/x-wiki', title: page.title,
     revision: revision.revid || 0, latest: revision.revid || 0,
     timestamp: revision.timestamp ? Math.floor(new Date(revision.timestamp).getTime() / 1000) : '',
-    url: `${articlePath}${encodeURIComponent(page.title.replaceAll(' ', '_'))}`, currentVersion: 1,
+    url: `${articlePath.value}${encodeURIComponent(page.title.replaceAll(' ', '_'))}`, currentVersion: 1,
     thumbnail: page.thumbnail?.source || '', description: page.description || ''
   };
 }
@@ -91,6 +102,41 @@ const items = computed({
 const articleCount = computed(() => items.value.filter((item) => item.type === 'article' && !item.missing).length);
 const metabook = computed(() => buildMetabook());
 const hasItems = computed(() => items.value.length > 0);
+
+// The wiki target is language subdomain + project domain, e.g. "fr" + "wikipedia.org".
+const PROJECT_DOMAINS = [
+  'wikipedia.org', 'wiktionary.org', 'wikivoyage.org', 'wikibooks.org',
+  'wikinews.org', 'wikiquote.org', 'wikisource.org', 'wikiversity.org'
+];
+const languageInput = ref(language.value);
+const projectOptions = computed(() => {
+  const domains = PROJECT_DOMAINS.includes(project.value) ? PROJECT_DOMAINS : [ project.value, ...PROJECT_DOMAINS ];
+  return domains.map((domain) => ({ value: domain, label: domain }));
+});
+const selectedProject = computed({
+  get: () => project.value,
+  set: (value) => { changeTarget(languageInput.value, value); }
+});
+// Switch the wiki the app talks to. Because every URL is derived from language +
+// project, changing either rebuilds the API endpoint, article links, and forms.
+// The already-loaded items belong to the old wiki (stale revisions/thumbnails), so
+// we clear them after confirming when the book is non-empty.
+function changeTarget(newLanguage, newProject) {
+  const nextLanguage = (newLanguage || '').trim();
+  // Nothing meaningful changed (or the language was cleared): revert the input.
+  if (!nextLanguage || `${nextLanguage}.${newProject}` === wikiHost.value) {
+    languageInput.value = language.value;
+    return;
+  }
+  if (items.value.length && !window.confirm('This will clear existing items on the list.')) {
+    languageInput.value = language.value;
+    return;
+  }
+  items.value = [];
+  language.value = nextLanguage;
+  project.value = newProject;
+  languageInput.value = nextLanguage;
+}
 
 function saveBooks() {
   localStorage.setItem(booksStorageKey, JSON.stringify(books.value));
@@ -162,7 +208,7 @@ async function loadTitles(titlesString) {
         await delay(BATCH_DELAY_MS);
       }
       const query = new URLSearchParams({ action: 'query', ...pageQueryProps, titles: batches[i].join('|'), redirects: '1', format: 'json', formatversion: '2', origin: '*' });
-      const response = await fetch(`${api}?${query}`);
+      const response = await fetch(`${api.value}?${query}`);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
       const q = data?.query || {};
@@ -172,7 +218,7 @@ async function loadTitles(titlesString) {
     }
     buildFromApi(titles, merged);
   } catch (error) {
-    showNotice(`Could not load pages from ${wikiHost}: ${error.message}. (Open this file over http(s) or check the wiki host.)`, 'error');
+    showNotice(`Could not load pages from ${wikiHost.value}: ${error.message}. (Open this file over http(s) or check the wiki host.)`, 'error');
   }
 }
 
@@ -198,7 +244,7 @@ function buildFromApi(requestedTitles, data) {
     if (!page || page.missing) {
       missingCount++;
       const missingTitle = page?.title || canonical;
-      return { type: 'article', title: missingTitle, revision: 0, latest: 0, timestamp: '', url: `${articlePath}${encodeURIComponent(missingTitle.replaceAll(' ', '_'))}`, currentVersion: 1, missing: true };
+      return { type: 'article', title: missingTitle, revision: 0, latest: 0, timestamp: '', url: `${articlePath.value}${encodeURIComponent(missingTitle.replaceAll(' ', '_'))}`, currentVersion: 1, missing: true };
     }
     return pageToItem(page);
   });
@@ -206,7 +252,7 @@ function buildFromApi(requestedTitles, data) {
   if (missingCount) showNotice(`${found} page(s) loaded, ${missingCount} not found (shown in red).`, 'warning');
   else {
     noticeVisible.value = false;
-    showNotice(`${found} page(s) loaded from ${wikiHost}.`);
+    showNotice(`${found} page(s) loaded from ${wikiHost.value}.`);
     noticeVisible.value = false;
   }
 }
@@ -302,7 +348,7 @@ async function onPageSearchInput(value) {
   }
   const query = new URLSearchParams({ action: 'opensearch', search: term, limit: '10', namespace: '0', format: 'json', origin: '*' });
   try {
-    const response = await fetch(`${api}?${query}`);
+    const response = await fetch(`${api.value}?${query}`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
     // opensearch returns [ term, titles[], descriptions[], urls[] ]
@@ -316,12 +362,12 @@ async function onPageSearchInput(value) {
 async function addPage(pageTitle) {
   const query = new URLSearchParams({ action: 'query', ...pageQueryProps, titles: pageTitle, redirects: '1', format: 'json', formatversion: '2', origin: '*' });
   try {
-    const response = await fetch(`${api}?${query}`);
+    const response = await fetch(`${api.value}?${query}`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
     const page = data?.query?.pages?.[0];
     if (!page || page.missing) {
-      showNotice(`Page "${pageTitle}" not found on ${wikiHost}.`, 'warning');
+      showNotice(`Page "${pageTitle}" not found on ${wikiHost.value}.`, 'warning');
       return;
     }
     items.value.push(pageToItem(page));
@@ -396,7 +442,7 @@ ${items.value
 `).join(`
 `)}`;
   const bookTitle = `Special:MyPage/Books/${encodeURIComponent(name)}`;
-  window.open(`https://${wikiHost}/wiki/${bookTitle}?action=edit&preload=Template:Preload_wikitext&preloadparams[]=${encodeURIComponent(wikitext)}`, '_blank', 'noopener');
+  window.open(`https://${wikiHost.value}/wiki/${bookTitle}?action=edit&preload=Template:Preload_wikitext&preloadparams[]=${encodeURIComponent(wikitext)}`, '_blank', 'noopener');
 }
 
 // Delay before steering the popup off the (blank) store response to the spinner
@@ -422,7 +468,7 @@ function reorderOnWiki(event) {
   const popup = window.open('', 'wikiCollection');
   sentToWiki.value = true;
   window.setTimeout(() => {
-    if (popup && !popup.closed) popup.location = orderPageUrl;
+    if (popup && !popup.closed) popup.location = orderPageUrl.value;
   }, REORDER_REDIRECT_MS);
 }
 
@@ -492,6 +538,14 @@ onMounted(() => {
     </div>
     <div class="collection-container">
       <section class="collection-column-left">
+        <div class="project-picker">
+          <CdxField label="Language:">
+            <CdxTextInput v-model="languageInput" @change="changeTarget(languageInput, project)" />
+          </CdxField>
+          <CdxField label="Wiki:">
+            <CdxSelect v-model:selected="selectedProject" :menu-items="projectOptions" />
+          </CdxField>
+        </div>
         <CdxField label="Title:">
           <CdxTextInput placeholder="Title of book" v-model="title" />
         </CdxField>
@@ -604,6 +658,8 @@ a { color: #36c; text-decoration: none; } a:hover { text-decoration: underline; 
 .toolbar { display: flex; gap: .5em; flex-wrap: wrap; margin: 1em 0 .5em; }
 .book-picker { align-items: end; display: flex; gap: .75em; margin-bottom: 1em; max-width: 32em; }
 .book-picker .cdx-field { flex: 1; }
+.project-picker { align-items: end; display: flex; gap: .75em; margin-bottom: 1em; }
+.project-picker .cdx-field { flex: 1; }
 .collection-hint { color: #54595d; font-size: 95%; font-style: italic; margin: .25em 0 .75em; }
 .collection-list { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--border-light); }
 .collection-list li { display: flex; align-items: center; gap: .25em; padding: 4px; border-bottom: 1px solid var(--border-light); cursor: grab; }
