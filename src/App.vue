@@ -462,6 +462,14 @@ function clearItems() {
     subtitle.value = '';
   }
 }
+// Remove the (empty) active book entirely, then fall back to another book —
+// recreating a single empty default if it was the last one.
+function deleteBook() {
+  const remaining = books.value.filter((book) => book.id !== activeBookId.value);
+  books.value = remaining.length ? remaining : [ defaultBook() ];
+  activeBookId.value = books.value[0].id;
+  noticeVisible.value = false;
+}
 function selectBook(bookId) {
   if (!books.value.some((book) => book.id === bookId)) return;
   saveBooks();
@@ -653,7 +661,7 @@ onMounted(() => {
           <CdxButton weight="quiet" @click="addChapter">Create chapter</CdxButton>
           <CdxButton weight="quiet" @click="addPageDialogOpen = true">Add page</CdxButton>
           <CdxButton weight="quiet" @click="sortItems">Sort alphabetically</CdxButton>
-          <CdxButton weight="quiet" @click="clearItems">Clear book</CdxButton>
+          <CdxButton weight="quiet" @click="hasItems ? clearItems() : deleteBook()">{{ hasItems ? 'Clear book' : 'Delete book' }}</CdxButton>
         </div>
         <p v-if="hasItems" class="collection-hint">Drag rows or use the arrow buttons to reorder wiki pages and chapters</p>
         <ul v-if="hasItems" class="collection-list">
